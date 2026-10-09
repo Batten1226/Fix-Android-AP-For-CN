@@ -16,8 +16,8 @@
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| **6 GHz 热点** | ✅ 可用 | 需要 Magisk 模块 + LSPosed 双钩子，**且必须显式指定 PSC 信道** |
-| **6 GHz 160 MHz** | ✅ 可用 | `SoftApInfo{frequency=6135}` + hostapd `AP-ENABLED` |
+| **6 GHz 热点** | ✅ 可用（**含系统热点 UI**） | Magisk 模块 + LSPosed 钩子；6 GHz 信道由钩子自动补，UI 与命令行都可用 |
+| **6 GHz 160 MHz** | ✅ 可用 | `SoftApInfo{frequency=6135, bandwidth=6}` + hostapd `AP-ENABLED` |
 | **5 GHz 160 MHz** | ✅ 可用 | `-w 160` 直接生效，无需任何修改 |
 | **2.4 GHz** | ✅ 可用 | — |
 | Wi-Fi 7（802.11be / EHT） | ❌ 不可用 | 卡在**驱动代际**，详见下方「已知限制」 |
@@ -72,10 +72,16 @@ Magisk → 左上角菜单 → **从本地安装** → 选 `fabhotspot_6g-v0.3.0
 
 ### 第 4 步：开一个 6 GHz 热点
 
+**首选：直接用系统热点 UI** —— 在设置里把热点频段选为 6 GHz 即可。
+（本版本加了钩子自动补 PSC 信道，所以 UI 的"自动选信道"也能用。）
+
+命令行方式（备选 / 用于验证）：
+
 ```bash
-# ★ 必须显式指定一个 6 GHz PSC 信道；-f 必须是最后一个参数
-# ★ -b 6 才是 6GHz（-b 8 会报 Invalid band option）
+# -b 6 才是 6GHz（-b 8 会报 Invalid band option）；-f 必须是最后一个参数
 adb shell su -c 'cmd wifi start-softap MyAP wpa3 <密码> -b 6 -w 160 -f 6135'
+# 不带 -f 也可以（钩子会自动补信道 37）
+adb shell su -c 'cmd wifi start-softap MyAP wpa3 <密码> -b 6 -w 160'
 ```
 
 - `-f 6135` = 信道 37；`-f 6295` = 信道 69。**非 PSC 信道（如 5955）会失败。**

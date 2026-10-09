@@ -23,8 +23,8 @@
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| **6 GHz 热点** | ✅ **已实测可用** | 需要 Magisk 国码模块 + LSPosed 双钩子，**且必须显式指定 PSC 信道** |
-| **6 GHz 160 MHz** | ✅ **已实测可用** | `SoftApInfo{frequency=6135}` + hostapd `AP-ENABLED` |
+| **6 GHz 热点** | ✅ **已实测可用（含系统热点 UI）** | Magisk 国码模块 + LSPosed 钩子；6 GHz 信道由钩子自动补，UI 与命令行都可用 |
+| **6 GHz 160 MHz** | ✅ **已实测可用** | `SoftApInfo{frequency=6135, bandwidth=6}` + hostapd `AP-ENABLED` |
 | 5 GHz **160 MHz** | ✅ **已可用** | `-w 160` 直接生效，无需改法规域 |
 | 2.4 GHz | ✅ **已可用** | — |
 | Wi-Fi 7 (**802.11be / EHT**) | ❌ **实测不可用** | 见下文「已知阻塞 · 2」 |
@@ -61,13 +61,28 @@
 `WifiNative#setApCountryCode(iface, cc)` 把 `cc` 改写成目标国码。
 依据：`SoftApManager.setCountryCode()`（`:529`）在起 **5 GHz / 6 GHz** 热点时会把框架认定的 CN 直接推给 `wlan2`，能力表随即从 `In6g[59 个信道] / mCountryCodeFromDriverUS` 掉回 `In6g[] / mCountryCodeFromDriverCN`，SAP 启动失败。
 
-**④ 必须显式指定 PSC 信道（否则 ACS 必失败）**
-```bash
-# -b 6 才是 6GHz（-b 8 报 Invalid band option）；-f 必须是最后一个参数
-cmd wifi start-softap <ssid> wpa3 <pw> -b 6 -w 160 -f 6135   # ch37 = 6135 MHz
+**④ 6 GHz 信道：由钩子自动补上（UI 与命令行都可用）**
+
+6 GHz 必须使用 **PSC 信道**（如 ch37 / 6135 MHz），而系统 UI 默认走"自动选信道"（`channel=0`）。
+`ApConfigUtil.updateApChannelConfig()`（`:549`）在 `channel==0` 时调 `chooseApChannel(band, …)`，
+**6 GHz 下它返回 `-1` → `:561` 直接判失败** —— 这就是「UI 开 6GHz 必失败」
+和「`start-softap -b 6` 不带 `-f` 必失败」的同一个根因
+（hostapd 侧表现为 `ACS: Offloading to driver` → `Could not select hw_mode and channel`）。
+
+LSPosed 钩子 `ApConfigUtil#chooseApChannel` 只在 **band 恰好是 6 GHz** 且原结果不是合法 6 GHz 频率时，
+补上 **6135（PSC ch37）**；不涉及 6 GHz 时完全不动，2.4/5 GHz、`-b any` 一律不受影响。
+
+**实测**（2026-10-09，加钩子后）：
 ```
-失败时 hostapd 报 `Configured channel (0) … not found from the channel list of the current mode (2) IEEE 802.11a` + `ACS: Offloading to driver`
-—— 即**驱动返回不了 6 GHz 频道给 ACS**，不是信道表没解锁。非 PSC 信道（如 ch1 = 5955）也会失败。
+-b 6 不带 -f  →  SoftApInfo{bandwidth=6, frequency=6135, wifiStandard=6}   ✅ UI 等价路径
+-b 6 -f 6135  →  channel=37 / op_class=134 / AP-ENABLED                   ✅ 回归通过
+-b 5 -w 160   →  frequency=5200, bandwidth=6                              ✅ 回归通过
+-b 2          →  frequency=2437                                           ✅ 回归通过
+```
+
+> 命令行仍可显式指定：`cmd wifi start-softap <ssid> wpa3 <pw> -b 6 -w 160 -f 6135`
+> （**`-b 6` 才是 6GHz**，`-b 8` 报 `Invalid band option`；**`-f` 必须是最后一个参数**，它会吞掉后面所有参数）。
+> **非 PSC 信道（如 ch1 = 5955）会失败。**
 
 > **⚠️ 必须避开 `cmd wifi force-country-code`**：框架级法规域覆盖会让驱动进入不一致状态，
 > **所有频段**（包括本来能用的 5 GHz）的热点都起不来：

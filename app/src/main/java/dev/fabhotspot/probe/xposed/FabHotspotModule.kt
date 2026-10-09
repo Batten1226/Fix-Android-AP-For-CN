@@ -36,6 +36,12 @@ private const val PROP_FORCE_COUNTRY = "persist.fabhotspot.country"
  */
 private const val TARGET_COUNTRY = "US"
 
+/** 6GHz 的默认 PSC 信道：37（6135 MHz）。`SoftApConfiguration.BAND_6GHZ = 4`。 */
+private const val BAND_6GHZ_ONLY = 4
+private const val SIX_GHZ_PSC_FREQ = 6135
+private const val SIX_GHZ_MIN = 5955
+private const val SIX_GHZ_MAX = 7115
+
 /**
  * fab-hotspot 的 LSPosed 模块（与体检 App 同一个 APK）。
  *
@@ -63,6 +69,7 @@ class FabHotspotModule : IXposedHookLoadPackage {
     private var loggedCaps = false
     private var loggedCountry = false
     private var loggedApCc = false
+    private var loggedSixGhzCh = false
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != PKG_SYSTEM) return
@@ -162,6 +169,9 @@ class FabHotspotModule : IXposedHookLoadPackage {
         // ★ 6GHz 的关键之二：起 5G/6GHz 热点时框架推给 AP 网卡的国码要改写成目标国码
         hookApCountryCode(cl)
 
+        // ★ 6GHz 的关键之三：自动补 6GHz 信道，让系统 UI / 无 -f 的路径也能起
+        hookSixGhzDefaultChannel(cl)
+
         // 诊断：把最终交给原生 HAL 的 hwMode 参数打出来
         hookHostapdDiag(cl)
 
@@ -256,6 +266,40 @@ class FabHotspotModule : IXposedHookLoadPackage {
                 }
                 param.args[1] = TARGET_COUNTRY
             }
+        }
+    }
+
+    /**
+     * 让**系统热点 UI** 也能开 6 GHz —— 也就是"从图形界面一键启用"的那一步。
+     *
+     * 闸门在 `ApConfigUtil.updateApChannelConfig()`（:549）：
+     * ```java
+     * if (softApConfiguration.getChannel() == 0) {
+     *     int freq = chooseApChannel(getBand(), ...);   // ← :560
+     *     if (freq == -1) return FAILURE;               // ← :561，直接判失败
+     *     builder.setChannel(convertFrequencyMhzToChannel(freq), convertFrequencyToBand(freq));
+     * }
+     * ```
+     * UI 默认走"自动选信道"（`channel == 0`，小米还有 `setHotSpotFastAcs()`），
+     * 而 6 GHz 下 `chooseApChannel` 返回 **-1**（驱动无法为 ACS 提供 6 GHz 频道，
+     * hostapd 侧表现为 `ACS: Offloading to driver` → `Could not select hw_mode and channel`）。
+     * 这就是「不带 `-f` 的 `start-softap -b 6` 必失败」「系统 UI 开 6GHz 必失败」的同一个根因。
+     *
+     * 这里只在 **band 恰好是 6 GHz（`BAND_6GHZ = 4`）** 且原结果不是合法 6 GHz 频率时，
+     * 补上 PSC 信道 37（6135 MHz）。不涉及 6 GHz 时**完全不动**，
+     * 因此 2.4 / 5 GHz、`-b any`（band=7）等既有行为一律不受影响。
+     */
+    private fun hookSixGhzDefaultChannel(cl: ClassLoader?) {
+        hookAfterAll(cl, CLS_AP_CONFIG_UTIL, "chooseApChannel") { param ->
+            val band = param.args.getOrNull(0) as? Int ?: return@hookAfterAll
+            if (band != BAND_6GHZ_ONLY) return@hookAfterAll          // 只接管纯 6GHz
+            val orig = param.result as? Int
+            if (orig != null && orig in SIX_GHZ_MIN..SIX_GHZ_MAX) return@hookAfterAll  // 已给出合法 6GHz 频率
+            if (!loggedSixGhzCh) {
+                loggedSixGhzCh = true
+                log("★ 6GHz 自动补信道：chooseApChannel(band=$band) 原结果=$orig -> $SIX_GHZ_PSC_FREQ (PSC ch37)")
+            }
+            param.result = SIX_GHZ_PSC_FREQ
         }
     }
 
