@@ -42,6 +42,10 @@ import java.io.File
 
 private const val FILE_NAME = "fabhotspot-report.json"
 
+/** 6 GHz hotspot defaults (WPA3 passphrase must be >= 8 chars). */
+private const val AP_SSID = "Xiaomi13-6G"
+private const val AP_PASS = "fabhotspot6g"
+
 /**
  * 报告落盘位置。
  *
@@ -115,9 +119,75 @@ fun ProbeScreen(autoRun: Boolean = false) {
             Text("fab-hotspot 体检 (Phase 1)", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text(
-                "只读探测：不写 sysfs、不改任何配置、不启停热点。" +
-                    "唯一写盘的是按钮「导出 JSON」产生的报告文件。",
+                "体检部分只读：不写 sysfs、不改任何配置。下面的 6GHz 开关会启停热点。" +
+                    "体检唯一写盘的是按钮「导出 JSON」产生的报告文件。",
                 style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(10.dp))
+
+            // ---- 6 GHz hotspot toggle (the core deliverable) ----
+            Spacer(Modifier.height(10.dp))
+            Text("6 GHz Hotspot", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "SSID $AP_SSID / passphrase $AP_PASS (WPA3). " +
+                    "Needs the Magisk country module + the LSPosed module; " +
+                    "the channel is auto-filled with PSC 37 (6135 MHz).",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(6.dp))
+
+            var apBusy by remember { mutableStateOf(false) }
+            var apOn by remember { mutableStateOf(false) }
+            var apStatus by remember { mutableStateOf("hotspot not running") }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !apBusy,
+                    onClick = {
+                        apBusy = true
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) {
+                                val cmd = if (apOn) "cmd wifi stop-softap"
+                                else "cmd wifi start-softap $AP_SSID wpa3 $AP_PASS -b 6 -w 160"
+                                val res = SuShell.run(cmd, timeoutMs = 30_000)
+                                if (apOn) {
+                                    Thread.sleep(2000)
+                                    "hotspot stopped"
+                                } else {
+                                    Thread.sleep(12_000)
+                                    val st = SuShell.run(
+                                        "dumpsys wifi | grep -o 'SoftApInfo{[^}]*}' | head -1",
+                                        timeoutMs = 30_000
+                                    )
+                                    val line = st.output.lines()
+                                        .firstOrNull { it.contains("SoftApInfo{") }?.trim() ?: ""
+                                    when {
+                                        line.isNotEmpty() -> "running: " + line
+                                        res.ok -> "command sent but no SoftApInfo yet, retry"
+                                        else -> "failed(exit=" + res.exitCode + "): " +
+                                            res.output.trim().take(160)
+                                    }
+                                }
+                            }
+                            apStatus = r
+                            apOn = r.startsWith("running")
+                            apBusy = false
+                        }
+                    }
+                ) {
+                    Text(
+                        when {
+                            apBusy -> "working..."
+                            apOn -> "Stop 6 GHz hotspot"
+                            else -> "Start 6 GHz hotspot"
+                        }
+                    )
+                }
+            }
+            Text(
+                apStatus,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace
             )
             Spacer(Modifier.height(10.dp))
 

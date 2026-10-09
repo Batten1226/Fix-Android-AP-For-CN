@@ -39,6 +39,39 @@
 
 ---
 
+
+## 验收：真机端到端（2026-10-09）
+
+客户端 **MediaTek MT7925**（Kali Linux，真 Wi-Fi 7 卡）连到手机热点：
+
+```
+iw dev wlan0 link
+Connected to 6a:aa:c6:8b:84:5e (on wlan0)
+    SSID: Xiaomi13-6G
+    freq: 6135.0
+    signal: -48 dBm
+    rx bitrate: 2161.3 MBit/s 160MHz HE-MCS 10 HE-NSS 2 HE-GI 0 HE-DCM 0
+    tx bitrate: 576.4 MBit/s 160MHz HE-MCS 3 HE-NSS 2 HE-GI 0 HE-DCM 0
+    RX: 90050 bytes (651 packets)   TX: 9424 bytes (66 packets)
+```
+
+| 判据 | 结果 | 结论 |
+|---|---|---|
+| 6GHz 连通 | `freq: 6135.0`，BSSID 与手机上报一致，有真实流量 | ✅ **端到端通过** |
+| 160 MHz | `160MHz`，`2161.3 MBit/s` ≈ 2x2 HE-MCS10 @160MHz 的理论值 | ✅ **带宽真实生效** |
+| Wi-Fi 7 (11be) | 协商到 **HE (802.11ax)**，全程无 `EHT` | ❌ **AP 侧未启用** |
+
+**⭐ 关键**：MT7925 是真 Wi-Fi 7 客户端，所以"只有 HE、没有 EHT"**不能归咎于客户端** ——
+这证实了上文「11be 卡在驱动代际」的结论，**假阴性已排除**。
+
+**补充判据**：`rx 2161.3 MBit/s` 恰好是 `2x2 / HE MCS10 / 160MHz` 的理论速率，
+说明手机侧的 160 MHz 不是配置上写着，而是**实际协商成功**。
+
+> Windows（RTL8852CE）扫不到 6GHz 属于**法规域问题**：该机 `802.11d: 禁用`，
+> 且中国大陆未给 WLAN 分配 6GHz；客户端 `iw reg set US` 后即可扫到（与 Kali 侧一致）。
+
+---
+
 ## 已知阻塞与解锁机制（全部为实测结论）
 
 ### 1. 6 GHz：✅ 已解锁 —— 三个部件缺一不可

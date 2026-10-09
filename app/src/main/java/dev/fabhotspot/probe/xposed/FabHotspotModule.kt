@@ -43,6 +43,7 @@ private const val TARGET_COUNTRY = "US"
 /** 6GHz 的默认 PSC 信道：37（6135 MHz）。`SoftApConfiguration.BAND_6GHZ = 4`。 */
 private const val BAND_6GHZ_ONLY = 4
 private const val SIX_GHZ_PSC_FREQ = 6135
+private const val SIX_GHZ_PSC_CHANNEL = 37
 private const val SIX_GHZ_MIN = 5955
 private const val SIX_GHZ_MAX = 7115
 
@@ -74,28 +75,8 @@ class FabHotspotModule : IXposedHookLoadPackage {
     private var loggedCountry = false
     private var loggedApCc = false
     private var loggedSixGhzCh = false
-    private var logged6gGate = false
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // ---- 系统设置进程：放行 6GHz 频段选项（决定 UI 里看不看得到「6 GHz」） ----
-        if (lpparam.packageName == PKG_SETTINGS) {
-            val scl = lpparam.classLoader
-            runCatching {
-                if (scl == null) throw IllegalStateException("no classloader")
-                // WifiTetherApBandPreferenceController:131  m6GHzSupported = mWifiManager.is6GHzBandSupported()
-                // WifiTetherApBandPreferenceController:139  is6GhzBandSupported() = m6GHzSupported && mCountryCode != null
-                // WifiHotspotRepository:305                 MIUI 的热点页也走这同一个方法
-                hookAll(scl, CLS_WIFI_MANAGER, "is6GHzBandSupported") { param ->
-                    if (!logged6gGate) {
-                        logged6gGate = true
-                        log("★ 放行 6GHz 频段选项：WifiManager#is6GHzBandSupported -> true（进程=设置）")
-                    }
-                    param.result = true
-                }
-            }.onFailure { log("!! 设置进程 6GHz 门钩子失败: ${it.message}") }
-            return
-        }
-
         if (lpparam.packageName != PKG_SYSTEM) return
         val cl = lpparam.classLoader ?: return
 
@@ -208,6 +189,29 @@ class FabHotspotModule : IXposedHookLoadPackage {
      * 把它们的实际值打出来，才能知道 11be 是在哪一步被关掉的。
      */
     private fun hookHostapdDiag(cl: ClassLoader?) {
+        // ★ 兜底：把 6GHz 的信道钉在离 HAL 最近的地方，任何重启/等待路径都绕不过它。
+        // prepareChannelParamsList 里 `enableAcs = isAcsSupported() && channel == 0`，
+        // 所以必须同时把 enableAcs 关掉，否则 hostapd 仍会走 ACS 而失败。
+        var pinned = false
+        hookAfterAll(cl, "com.android.server.wifi.HostapdHalAidlImp", "prepareChannelParamsList") { param ->
+            val cfg = param.args.getOrNull(0) ?: return@hookAfterAll
+            val band = runCatching { XposedHelpers.callMethod(cfg, "getBand") as? Int }.getOrNull()
+            if (band == null || band != BAND_6GHZ_ONLY) return@hookAfterAll   // 只接管纯 6GHz
+            val arr = param.result as? Array<*> ?: return@hookAfterAll
+            for (e in arr) {
+                val cp = e ?: continue
+                val ch = runCatching { XposedHelpers.getIntField(cp, "channel") }.getOrNull() ?: continue
+                if (ch != 0) continue                                  // 已显式指定，尊重用户
+                runCatching { XposedHelpers.setIntField(cp, "channel", SIX_GHZ_PSC_CHANNEL) }
+                runCatching { XposedHelpers.setBooleanField(cp, "enableAcs", false) }
+                if (!pinned) {
+                    pinned = true
+                    log("★ 钉住 6GHz 信道：prepareChannelParamsList -> channel=$SIX_GHZ_PSC_CHANNEL, enableAcs=false")
+                }
+            }
+        }
+
+
         hookAfterAll(cl, "com.android.server.wifi.HostapdHalAidlImp", "prepareHwModeParams") { param ->
             val r = param.result ?: return@hookAfterAll
             fun f(n: String): Any? = runCatching { XposedHelpers.getObjectField(r, n) }.getOrNull()
@@ -251,35 +255,32 @@ class FabHotspotModule : IXposedHookLoadPackage {
      * 这里让这个派发点直接返回，框架不再下发国码，驱动就保持自管区域 US —— 6GHz 信道表随之解锁。
      * 代价是漫游时不再跟随电话网络的国码，改由驱动自己的 802.11d 处理；停用本模块即恢复。
      */
+    /**
+     * 不是「拦住下发」，而是**把要下发的国码改写成目标国码**。
+     *
+     * 为什么不能直接跳过：`SoftApManager` 会记录框架侧的 `mCountryCode`。若框架仍认为是 CN，
+     * 而我们把 AP 网卡的下发改写成 US，状态机就会卡在
+     * ```
+     * Need to wait for driver country code update before starting
+     * Ignore country code changed: US        ← 期望 CN，收到 US 就忽略
+     * ```
+     * 然后超时失败（实测 2026-10-09）。让 `pickCountryCode` 直接给出 US 后，
+     * 框架与驱动都收敛到 US，等待条件被满足。
+     *
+     * 而且此时驱动本身已经是 US（Magisk 模块在模块加载瞬间注入 country_code=US），
+     * 所以「下发 US」对驱动是**幂等的确认**，不再是「改变国码」，
+     * 不会触发那条会打垮 SAP 的 `hdd_reg_notifier: Failed to set country`。
+     */
     private fun hookCountrySuppress(cl: ClassLoader?) {
-        var logged = false
-        hookAll(cl, CLS_COUNTRY_CODE, "updateCountryCode") { param ->
-            if (!logged) {
-                logged = true
-                val picked = runCatching {
-                    XposedHelpers.callMethod(param.thisObject, "pickCountryCode", false)
-                }.getOrNull()
-                log("★ 已拦截国码下发：WifiCountryCode.updateCountryCode（框架本想下发 $picked）")
+        hookAll(cl, CLS_COUNTRY_CODE, "pickCountryCode") { param ->
+            if (!loggedCountry) {
+                loggedCountry = true
+                log("★ 改写要下发的国码：WifiCountryCode#pickCountryCode -> $TARGET_COUNTRY" +
+                    "（让框架 mCountryCode 与驱动都收敛到 $TARGET_COUNTRY）")
             }
-            param.setResult(null)
+            param.result = TARGET_COUNTRY
         }
     }
-
-    /**
-     * 第二个国码下发点。`SoftApManager.setCountryCode()`（Java 层 :529）在起 **5GHz / 6GHz**
-     * 热点时（`band == 2 || band == 4`）会把 `mCountryCode`（框架认定的 CN）**直接推给 AP 网卡**
-     * `wlan2`：`WifiNative.setApCountryCode` → `WifiVendorHal` → AIDL `IWifiApIface.setCountryCode`。
-     * 2.4GHz 不受影响，所以这条路一直没暴露。
-     *
-     * 实测后果：起 6GHz 热点时能力表就在这一步从
-     *   `SupportedChannelListIn6g[59 个信道] + mCountryCodeFromDriverUS`
-     * 掉回
-     *   `SupportedChannelListIn6g[] + mCountryCodeFromDriverCN`
-     * 随后 `SoftApState{mState=14}` 启动失败。
-     *
-     * 这里把下发的国码改写成目标国码：既保留框架的状态机（仍返回成功、仍触发 change listener），
-     * 又不会抹掉驱动自管区域。
-     */
     private fun hookApCountryCode(cl: ClassLoader?) {
         hookAll(cl, CLS_WIFI_NATIVE, "setApCountryCode") { param ->
             val cc = param.args.getOrNull(1) as? String
