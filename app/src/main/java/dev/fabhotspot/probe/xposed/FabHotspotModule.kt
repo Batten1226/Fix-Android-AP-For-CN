@@ -31,6 +31,12 @@ private val BRIDGED_FEATURE_CODES = intArrayOf(41, 42)
 private const val PROP_FORCE_COUNTRY = "persist.fabhotspot.country"
 
 /**
+ * 目标国码。起 5G/6GHz 热点时框架会把框架认定的 CN 推给 AP 网卡、抹掉驱动自管区域，
+ * 这里把它改写成目标国码。**必须与 Magisk 模块的 `country_code=US` 保持一致。**
+ */
+private const val TARGET_COUNTRY = "US"
+
+/**
  * fab-hotspot 的 LSPosed 模块（与体检 App 同一个 APK）。
  *
  * 钩子依据来自对 `service-wifi.jar` 的反编译（计划 §4.10 / §4.12）：
@@ -56,6 +62,7 @@ class FabHotspotModule : IXposedHookLoadPackage {
 
     private var loggedCaps = false
     private var loggedCountry = false
+    private var loggedApCc = false
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != PKG_SYSTEM) return
@@ -146,8 +153,14 @@ class FabHotspotModule : IXposedHookLoadPackage {
             if (code in BRIDGED_FEATURE_CODES) param.result = true
         }
 
-        // 国码（可选）
+        // 国码（可选，靠 persist 属性开关）
         hookCountryCode(cl)
+
+        // ★ 6GHz 的关键：拦住框架把国码下发给 native
+        hookCountrySuppress(cl)
+
+        // ★ 6GHz 的关键之二：起 5G/6GHz 热点时框架推给 AP 网卡的国码要改写成目标国码
+        hookApCountryCode(cl)
 
         // 诊断：把最终交给原生 HAL 的 hwMode 参数打出来
         hookHostapdDiag(cl)
@@ -192,6 +205,57 @@ class FabHotspotModule : IXposedHookLoadPackage {
         }
         hookAll(cl, CLS_COUNTRY_CODE, "setOverrideCountryCode") { param ->
             param.args[0] = forced
+        }
+    }
+
+    /**
+     * 国行 HyperOS 的国码特判：`WifiCountryCode.updateCountryCode` 在
+     * `ro.miui.build.region == "CN"` 时会把国码**下发**给 native；非国行机型走 802.11d、
+     * 根本不下发。实测：Magisk 模块让驱动以 `country_code=US` 起来后，开机约 10 秒
+     * 正是被这一下覆盖回 `CN` 的（时间线：wall 7s 还是 `country US: DFS-FCC`，11s 变 `CN`）。
+     *
+     * 这里让这个派发点直接返回，框架不再下发国码，驱动就保持自管区域 US —— 6GHz 信道表随之解锁。
+     * 代价是漫游时不再跟随电话网络的国码，改由驱动自己的 802.11d 处理；停用本模块即恢复。
+     */
+    private fun hookCountrySuppress(cl: ClassLoader?) {
+        var logged = false
+        hookAll(cl, CLS_COUNTRY_CODE, "updateCountryCode") { param ->
+            if (!logged) {
+                logged = true
+                val picked = runCatching {
+                    XposedHelpers.callMethod(param.thisObject, "pickCountryCode", false)
+                }.getOrNull()
+                log("★ 已拦截国码下发：WifiCountryCode.updateCountryCode（框架本想下发 $picked）")
+            }
+            param.setResult(null)
+        }
+    }
+
+    /**
+     * 第二个国码下发点。`SoftApManager.setCountryCode()`（Java 层 :529）在起 **5GHz / 6GHz**
+     * 热点时（`band == 2 || band == 4`）会把 `mCountryCode`（框架认定的 CN）**直接推给 AP 网卡**
+     * `wlan2`：`WifiNative.setApCountryCode` → `WifiVendorHal` → AIDL `IWifiApIface.setCountryCode`。
+     * 2.4GHz 不受影响，所以这条路一直没暴露。
+     *
+     * 实测后果：起 6GHz 热点时能力表就在这一步从
+     *   `SupportedChannelListIn6g[59 个信道] + mCountryCodeFromDriverUS`
+     * 掉回
+     *   `SupportedChannelListIn6g[] + mCountryCodeFromDriverCN`
+     * 随后 `SoftApState{mState=14}` 启动失败。
+     *
+     * 这里把下发的国码改写成目标国码：既保留框架的状态机（仍返回成功、仍触发 change listener），
+     * 又不会抹掉驱动自管区域。
+     */
+    private fun hookApCountryCode(cl: ClassLoader?) {
+        hookAll(cl, CLS_WIFI_NATIVE, "setApCountryCode") { param ->
+            val cc = param.args.getOrNull(1) as? String
+            if (cc != null && !cc.equals(TARGET_COUNTRY, ignoreCase = true)) {
+                if (!loggedApCc) {
+                    loggedApCc = true
+                    log("★ 改写 AP 网卡国码：$cc -> $TARGET_COUNTRY（否则会抹掉驱动自管区域 US）")
+                }
+                param.args[1] = TARGET_COUNTRY
+            }
         }
     }
 

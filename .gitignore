@@ -39,3 +39,13 @@ local.properties
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ===== 大型第三方镜像 / 提取产物 —— 绝对不能进仓库 =====
+# 来源: LineageOS fuxi 全量 OTA（2.03 GiB）以及从 payload.bin 解出的分区镜像
+lineage-*.zip
+*.zip
+payload.bin
+*.img
+*.ko
+*.elf
+*.bin

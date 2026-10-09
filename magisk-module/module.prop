@@ -1,0 +1,6 @@
+id=fabhotspot_6g
+name=FabHotspot 6GHz Driver Country
+version=0.3.0
+versionCode=3
+author=Batten1226
+description=让 WLAN 驱动的自管 regulatory 域从 CN 变为 US，解锁 6GHz / 320MHz 信道表。做法：覆盖 WCNSS_qcom_cfg.ini 把 gCountryCodePriority 改为 1（驱动自己的国码优先），并在启动早期 rmmod + 带 country_code=US 重载驱动 kiwi_v2 —— 等覆盖层就绪后再 insmod，确保驱动读到的是被改过的配置。

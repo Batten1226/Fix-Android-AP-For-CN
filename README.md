@@ -23,9 +23,12 @@
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
+| **6 GHz 热点** | ✅ **已实测可用** | 需要 Magisk 国码模块 + LSPosed 双钩子，**且必须显式指定 PSC 信道** |
+| **6 GHz 160 MHz** | ✅ **已实测可用** | `SoftApInfo{frequency=6135}` + hostapd `AP-ENABLED` |
 | 5 GHz **160 MHz** | ✅ **已可用** | `-w 160` 直接生效，无需改法规域 |
-| **6 GHz** 频段 | 🟡 **信道列表可解锁，热点起不来** | 见下文「已知阻塞」 |
-| Wi-Fi 7 (**802.11be / EHT**) | 🟡 框架已放行，卡在原生 HAL | 见下文「已知阻塞」 |
+| 2.4 GHz | ✅ **已可用** | — |
+| Wi-Fi 7 (**802.11be / EHT**) | ❌ **实测不可用** | 见下文「已知阻塞 · 2」 |
+| **320 MHz** | ❌ **不可用** | EHT 专有带宽，随 11be |
 | bridged AP（2.4+5 并发） | 🟡 钩子已实现，待验证 | `WifiServiceImpl.isFeatureSupported(41/42)` |
 | AP **MLO** | 🟡 钩子已实现，待验证 | 总闸门是 `config_wifiSoftApMaxNumberMLDSupported=0` |
 | 三频并发 2.4+5+6 | ❌ **硬件不支持** | 芯片只有 2 个射频（`#channels <= 2`） |
@@ -34,42 +37,83 @@
 
 ---
 
-## 已知阻塞（诚实记录）
+## 已知阻塞与解锁机制（全部为实测结论）
 
-### 1. 6 GHz：热点起不来，卡在驱动
+### 1. 6 GHz：✅ 已解锁 —— 三个部件缺一不可
 
-用框架自带的调试命令改法规域，**信道列表会立刻出现**：
+单靠框架或单靠钩子都拿不到 6 GHz。实测可用的组合是：
 
+**① Magisk 模块（驱动级国码）**
+- `/sys/module/kiwi_v2/parameters/country_code` 是 `-r--r--r--`，**运行时无法写**，唯一注入点是模块加载瞬间的 `insmod` 命令行参数
+- 文件覆盖路线**已实测无效**（Magisk 的模块挂载比驱动读配置更晚）
+- 可用做法：`post-fs-data.sh` 里 `rmmod` → 等 Magisk 的 INI 覆盖层就绪 → `insmod … country_code=US`
+- 覆盖 `WCNSS_qcom_cfg.ini`，**逐字节只改一行** `gCountryCodePriority=0 → 1`（驱动自己的国码优先）
+- 效果：`iw reg get` 的 `phy#1 (self-managed)` 变成 `country US: DFS-FCC`，含 `(5945-7125 @160)` 与 **`(5925-7125 @320)`**
+
+**② LSPosed 钩子 A —— 拦住框架的国码下发**
+`WifiCountryCode#updateCountryCode` → `setResult(null)`。
+依据是**国行 HyperOS 的特判**（`WifiCountryCode:419`）：只有 `ro.miui.build.region == "CN"` 才会走下发分支，非国行机型依赖 802.11d 根本不下发。
+实测：不加钩子时驱动在开机约 10 秒被翻回 `CN`；加上后全程保持 `US: DFS-FCC`。
+
+**③ LSPosed 钩子 B —— 改写 AP 网卡的下发国码**
+`WifiNative#setApCountryCode(iface, cc)` 把 `cc` 改写成目标国码。
+依据：`SoftApManager.setCountryCode()`（`:529`）在起 **5 GHz / 6 GHz** 热点时会把框架认定的 CN 直接推给 `wlan2`，能力表随即从 `In6g[59 个信道] / mCountryCodeFromDriverUS` 掉回 `In6g[] / mCountryCodeFromDriverCN`，SAP 启动失败。
+
+**④ 必须显式指定 PSC 信道（否则 ACS 必失败）**
 ```bash
-cmd wifi force-country-code enabled US
-# 之后 HAL 的 SupportedChannelListIn6g 从 [] 变成 58 个信道
-# 驱动 iw reg get 也从 country CN 变成 country US: DFS-FCC，含 (5925-7125 @320)
+# -b 6 才是 6GHz（-b 8 报 Invalid band option）；-f 必须是最后一个参数
+cmd wifi start-softap <ssid> wpa3 <pw> -b 6 -w 160 -f 6135   # ch37 = 6135 MHz
 ```
+失败时 hostapd 报 `Configured channel (0) … not found from the channel list of the current mode (2) IEEE 802.11a` + `ACS: Offloading to driver`
+—— 即**驱动返回不了 6 GHz 频道给 ACS**，不是信道表没解锁。非 PSC 信道（如 ch1 = 5955）也会失败。
 
-但**热点在所有频段都起不来**（连本来能用的 5 GHz 也失败），驱动日志给出根因：
+> **⚠️ 必须避开 `cmd wifi force-country-code`**：框架级法规域覆盖会让驱动进入不一致状态，
+> **所有频段**（包括本来能用的 5 GHz）的热点都起不来：
+> ```
+> kiwi_v2: [E] hdd_reg_notifier: Failed to set country
+> kiwi_v2: [E] reg_get_band_from_cur_chan_list: Failed to retrieve the channel list
+> ```
 
-```
-kiwi_v2: [E] hdd_convert_nl80211_to_reg_band_mask: band: 2 not supported
-kiwi_v2: [E] hdd_reg_notifier: Failed to set country
-kiwi_v2: [E] reg_get_band_from_cur_chan_list: Failed to retrieve the channel list
-kiwi_v2: [E:SAP] sap_get_freq_list: No active channels present for the current region
-```
+### 2. 802.11be：❌ 实测卡在**驱动代际**，单文件替换不可行
 
-**结论**：框架级法规域覆盖会让驱动进入不一致状态。要真正起 6 GHz 热点，
-需要**驱动级**的国码来源（sysfs / INI / 开机脚本），而不是框架 hook。
-（`NL80211_BAND_6GHZ = 2`，`band: 2 not supported` 指向驱动的法规带掩码不含 6 GHz。）
-
-### 2. 802.11be：框架已放行，卡在原生 HAL 的映射
-
-LSPosed 钩子已经让所有框架侧闸门通过，诊断日志证明**框架确实把 11be 交给了原生 HAL**：
-
+**框架侧早已全部放行**（LSPosed 钩子后诊断日志实测）：
 ```
 ★ hwModeParams: 11BE=true  11AX=true  11AC=true  6GHz=true  maxBW=7
 ```
 
-但最终写出的 `hostapd_wlan2.conf` 里**只有 `ieee80211ax=1`，没有任何 EHT 键**。
-`freqlist` / `ieee80211ax` 这些键在 Java 层搜不到，是**原生 HAL 生成的** ——
-所以这一层的封锁 LSPosed 够不到，需要 Magisk 模块级手段（patch `hostapd` / `libwifi-hal`）。
+**但 hostapd 发出的 EHT beacon 被内核/驱动拒绝**，而且是**所有频段**：
+```
+E hostapd: Failed to set beacon parameters → Interface initialization failed
+（6 GHz / 5 GHz / 2.4 GHz 全部如此 —— 2.4 GHz 没有任何 EHT 带宽歧义，故排除「配置拼错」）
+```
+
+**驱动能力数据（`iw list`，按频段分开看，别只看 Band 1）：**
+```
+Band4 EHT PHY Capabilities (0x6200000000000000): 320MHz in 6GHz Supported  ← 固件有这个位
+Band4 EHT MAC Capabilities (0x0000) / EHT MCS/NSS 全零 / max NSS: Rx=0 Tx=0  ← 但没有可用 EHT 速率
+```
+
+**与新一代驱动的实测对比**（取自 LineageOS `fuxi` 构建的 `vendor_dlkm`）：
+
+| | 设备 stock | LineageOS |
+|---|---|---|
+| 大小 | 17,907,416 | **27,435,480** |
+| vermagic | `5.15.78` | `5.15.211-g093e3da978e7` |
+| `Disable eht cap for SAP/GO` | **0** | **1** |
+| `Configure EHT mode` / `eht_mode` | 0 / 0 | **1 / 7** |
+| `ap_mld` / `mlo_ap` / `eht_oper` | 0 / 27 / 1 | **3 / 59 / 6** |
+
+⇒ **新一代 qcacld 驱动带 SAP/GO 专用的 EHT 能力处理，设备那份旧代没有。**
+
+**⚠️ 但它无法直接替换 —— 已实测：**
+1. vermagic **可以** patch（内核不再报 version magic 错误）
+2. 但接着卡在 **`cnss2` 的符号**：`disagrees about version of symbol qmp_get`（CRC）以及
+   `Unknown symbol msm_pcie_dsp_link_control` / `wlfw_aux_uc_info_resp_msg_v01_ei`（**符号在本机模块栈里根本不存在**，`err -2`）
+3. ⇒ **换驱动 = 换整套（内核 + 全部 vendor 模块 + 固件），不是替换单个 `.ko`**
+
+**⇒ 现实唯一路径**：等 Xiaomi 为 fuxi 出一份完整配套的新版 vendor + 内核（即新版 ROM）。
+（旁证：本机 `ro.vendor.build.fingerprint` 的基线是 **Android 13**（`fuxi:13/TKQ1.221114.001`），
+而系统是 Android 16 —— 整个 vendor 栈从未随系统升级过。）
 
 ---
 
@@ -120,17 +164,23 @@ adb shell am start -n dev.fabhotspot.probe/.MainActivity --ez autorun true
 
 验证：`adb logcat -s FabHotspotMod` 应看到每个钩子的匹配方法数。
 
-### 可选：打开法规域钩子（有风险）
+### 安装 Magisk 国码模块（6 GHz 的必要条件之一）
 
 ```bash
-# 打开
-adb shell su -c 'setprop persist.fabhotspot.country US'
-# 关闭
-adb shell su -c 'setprop persist.fabhotspot.country ""'
+# 打包（必须用 zipfile 写正斜杠，PowerShell 的 Compress-Archive 会用反斜杠导致 Magisk 解错）
+python .analysis/make_module_zip.py          # 产物: .analysis/fabhotspot_6g.zip
+adb push .analysis/fabhotspot_6g.zip /data/local/tmp/
+adb shell su -c 'magisk --install-module /data/local/tmp/fab6g.zip'
+adb reboot
 ```
 
-**默认是关闭的。** 原因见上文「已知阻塞 1」—— 框架级法规域改动会让驱动拒绝设置国码，
-可能导致**整台 WiFi 都不可用**。恢复：关掉 LSPosed 模块作用域后重启。
+**回滚**：Magisk → 模块 → 停用 **FabHotspot 6GHz Driver Country**，重启即可。
+模块只做两件事：覆盖 `WCNSS_qcom_cfg.ini` 的 `gCountryCodePriority=0→1`（逐字节只改一行），
+以及在 `post-fs-data` 里 `rmmod` → 等覆盖层就绪 → `insmod … country_code=US`。
+
+> **不要用** `persist.fabhotspot.country` 那个旧的"法规域钩子"（`FabHotspotModule` 里仍保留、
+> 但默认关闭）：框架级法规域改动会让驱动进入不一致状态，**所有频段**的热点都可能起不来。
+> 6 GHz 必须走上面的**驱动级国码**路线。
 
 ---
 
@@ -148,10 +198,18 @@ app/src/main/java/dev/fabhotspot/probe/
 ├── priv/SuShell.kt              唯一提权出口
 ├── priv/Redact.kt               报告脱敏（口令/MAC）
 └── xposed/
-    └── FabHotspotModule.kt      LSPosed 钩子
+    └── FabHotspotModule.kt      LSPosed 钩子（含 6 GHz 的两个国码钩子）
+
+magisk-module/                   6 GHz 国码模块（Magisk）
+├── module.prop
+├── post-fs-data.sh              rmmod → 等 INI 覆盖层就绪 → insmod country_code=US
+├── service.sh                   开机后把生效状态写进 boot.log
+└── system/vendor/etc/wifi/kiwi_v2/WCNSS_qcom_cfg.ini
+                                 只改一行：gCountryCodePriority=0 → 1
 ```
 
 **体检 App 是零写入的**：不调 setter、不写 sysfs、不启停热点。
+**Magisk 模块是唯一会改系统配置的地方**，且可用 Magisk 的「停用」一键回滚。
 
 ---
 
