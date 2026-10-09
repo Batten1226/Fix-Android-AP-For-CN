@@ -186,7 +186,7 @@ fun ProbeScreen(autoRun: Boolean = false) {
                         scope.launch {
                             val r = withContext(Dispatchers.IO) {
                                 val cmd = if (apOn) "cmd wifi stop-softap"
-                                else "cmd wifi start-softap $ssid wpa3 $pass -b 6 -w 160"
+                                else "cmd wifi start-softap $ssid wpa3 $pass -b 6 -w 160 -f 6135"
                                 val res = SuShell.run(cmd, timeoutMs = 30_000)
                                 if (apOn) {
                                     Thread.sleep(2000)
