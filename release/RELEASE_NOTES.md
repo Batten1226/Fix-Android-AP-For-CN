@@ -1,4 +1,4 @@
-# Fix Android AP For CN — v0.4.0
+# Fix Android AP For CN — v0.5.0
 
 在**国行小米 13（`fuxi`）**上解锁被地区限制的**热点（SoftAP）**能力。本版本的核心成果：
 
@@ -157,6 +157,31 @@ E hostapd: Failed to set beacon parameters → Interface initialization failed
 
 **附带事实**：本机 `ro.vendor.build.fingerprint` 的基线是 **Android 13**，而系统是 Android 16 ——
 整个 vendor 栈从未随系统升级过，这也解释了 hostapd 的 AIDL 只有 v1。
+
+---
+
+## What's new in v0.5.0
+
+- **Editable SSID / passphrase** in the app (persisted in `SharedPreferences`,
+  passphrase masked, and the Start button is disabled while the inputs are invalid).
+  The previous build hardcoded `Xiaomi13-6G` / `fabhotspot6g` in public source.
+- **"Start 6 GHz hotspot" button** in the app — one tap instead of an adb command.
+  Verified end-to-end from the UI: `SoftApInfo{bandwidth=6, frequency=6135, wifiStandard=6}`
+  cross-checked against `iw dev wlan2 info` → `channel 37 (6135 MHz), width 160 MHz, center1 6185`.
+- The button passes **`-f 6135` (PSC ch37)** explicitly, so it depends only on the Magisk
+  country module and not on any LSPosed hook.
+- New LSPosed hook `ApConfigUtil#chooseApChannel`: fills in PSC ch37 when the requested
+  band is exactly 6 GHz and the framework would otherwise fail with `channel == 0`
+  (this is what makes the *system* hotspot UI path work when `-f` is not used).
+- New LSPosed hook `HostapdHalAidlImp#prepareChannelParamsList`: pins `channel=37` and
+  clears `enableAcs` for a pure-6GHz config at the last point before the HAL call, so a
+  restart/wait path cannot drop it back to 0.
+- `WifiCountryCode#pickCountryCode` now **rewrites** the country to `US` instead of
+  suppressing the push, so the framework's `mCountryCode` converges to the driver's
+  `US` (`Ignore country code changed: US` no longer stalls `SoftApManager`).
+
+> Note: items 3–5 are defensive belt-and-braces around the button. The button itself
+> was verified working with `-f 6135`.
 
 ---
 
