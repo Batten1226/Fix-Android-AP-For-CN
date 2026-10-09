@@ -17,6 +17,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,8 +45,10 @@ import java.io.File
 private const val FILE_NAME = "fabhotspot-report.json"
 
 /** 6 GHz hotspot defaults (WPA3 passphrase must be >= 8 chars). */
-private const val AP_SSID = "Xiaomi13-6G"
-private const val AP_PASS = "fabhotspot6g"
+private const val KEY_SSID = "ssid"
+private const val KEY_PASS = "pass"
+private const val DEF_SSID = "Xiaomi13-6G"
+private const val DEF_PASS = "fabhotspot6g"
 
 /**
  * 报告落盘位置。
@@ -129,26 +133,60 @@ fun ProbeScreen(autoRun: Boolean = false) {
             Spacer(Modifier.height(10.dp))
             Text("6 GHz Hotspot", style = MaterialTheme.typography.titleSmall)
             Text(
-                "SSID $AP_SSID / passphrase $AP_PASS (WPA3). " +
-                    "Needs the Magisk country module + the LSPosed module; " +
-                    "the channel is auto-filled with PSC 37 (6135 MHz).",
+                "Needs the Magisk country module + the LSPosed module. " +
+                    "The channel is auto-filled with PSC 37 (6135 MHz). " +
+                    "WPA3 needs a passphrase of at least 8 characters.",
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(Modifier.height(6.dp))
 
+            val prefs = remember { context.getSharedPreferences("hotspot", Context.MODE_PRIVATE) }
+            var ssid by remember {
+                mutableStateOf(prefs.getString(KEY_SSID, DEF_SSID) ?: DEF_SSID)
+            }
+            var pass by remember {
+                mutableStateOf(prefs.getString(KEY_PASS, DEF_PASS) ?: DEF_PASS)
+            }
             var apBusy by remember { mutableStateOf(false) }
             var apOn by remember { mutableStateOf(false) }
             var apStatus by remember { mutableStateOf("hotspot not running") }
 
+            OutlinedTextField(
+                value = ssid,
+                onValueChange = {
+                    ssid = it
+                    prefs.edit().putString(KEY_SSID, it).apply()
+                },
+                label = { Text("SSID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = pass,
+                onValueChange = {
+                    pass = it
+                    prefs.edit().putString(KEY_PASS, it).apply()
+                },
+                label = { Text("Passphrase (>= 8 chars)") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+
+            val ssidOk = ssid.isNotBlank()
+            val passOk = pass.length >= 8
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    enabled = !apBusy,
+                    enabled = !apBusy && ssidOk && passOk,
                     onClick = {
                         apBusy = true
                         scope.launch {
                             val r = withContext(Dispatchers.IO) {
                                 val cmd = if (apOn) "cmd wifi stop-softap"
-                                else "cmd wifi start-softap $AP_SSID wpa3 $AP_PASS -b 6 -w 160"
+                                else "cmd wifi start-softap $ssid wpa3 $pass -b 6 -w 160"
                                 val res = SuShell.run(cmd, timeoutMs = 30_000)
                                 if (apOn) {
                                     Thread.sleep(2000)
@@ -185,7 +223,11 @@ fun ProbeScreen(autoRun: Boolean = false) {
                 }
             }
             Text(
-                apStatus,
+                when {
+                    !ssidOk -> "SSID must not be empty"
+                    !passOk -> "passphrase must be at least 8 characters"
+                    else -> apStatus
+                },
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace
             )
