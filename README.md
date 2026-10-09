@@ -266,3 +266,7 @@ magisk-module/                   6 GHz 国码模块（Magisk）
 ## 许可证
 
 [GPL-3.0](LICENSE)
+
+---
+
+本项目具有大量 vibe coding 内容，部分内容可能存疑，使用DeepSeek V4.1 Flash 与Xiaomi Mimo V2.6 Flash编写，工具采用MiMo Code
