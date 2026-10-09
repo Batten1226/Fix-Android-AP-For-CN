@@ -29,8 +29,10 @@
 | 2.4 GHz | ✅ **已可用** | — |
 | Wi-Fi 7 (**802.11be / EHT**) | ❌ **实测不可用** | 见下文「已知阻塞 · 2」 |
 | **320 MHz** | ❌ **不可用** | EHT 专有带宽，随 11be |
-| bridged AP（2.4+5 并发） | 🟡 钩子已实现，待验证 | `WifiServiceImpl.isFeatureSupported(41/42)` |
-| AP **MLO** | 🟡 钩子已实现，待验证 | 总闸门是 `config_wifiSoftApMaxNumberMLDSupported=0` |
+| bridged AP（2.4+5 并发） | ❌ **实测不生效** | 只起 1 个 AP 网卡，被降级成跨频段 ACS 单 AP。硬闸门是 `config_wifiBridgedSoftApSupported=false`，`isFeatureSupported(41/42)` 钩子只覆盖了 HAL 能力位那一半 |
+| bridged **5+6** 并发 | ❌ **框架直接拒绝** | `-b bridged_5_6` → 0 网卡、**无 conf、hostapd 日志为空**（`SupportedChannelListIn60g[]` 亦为空） |
+| bridged 2.4+6 | ❌ **降级成单 AP** | 同 2.4+5，最终停在 2462（2.4G 11n） |
+| AP **MLO** | ❌ **实测不生效** | 无 `ap_mld`/`mld` 键、1 个网卡、`ieee80211be` 未进 conf。**MLO 前提是 11be，随 11be 一起不可用** |
 | 三频并发 2.4+5+6 | ❌ **硬件不支持** | 芯片只有 2 个射频（`#channels <= 2`） |
 | 隐藏 SSID / 自定义 BSSID | ✅ 原生 API 支持 | `SoftApConfiguration.Builder` |
 | WPA3 / WPA3 过渡 | ✅ 原生已开 | hostapd 已是 `WPA-PSK SAE` |
