@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 用平台自带主题，避免额外引入 Material Components 依赖 -->
+    <style name="Theme.FabHotspot" parent="android:Theme.Material.NoActionBar" />
+</resources>

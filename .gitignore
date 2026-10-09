@@ -1,35 +1,41 @@
-# Gradle files
+# ============================================================================
+# 绝对不要提交 —— 反编译产物 / 从设备拉取的厂商私有文件 / 含明文口令的抓取结果
+#
+# .analysis/ 里有：
+#   - miui-wifi-service.jar        （从设备拉出的小米私有 jar，侵权风险）
+#   - jadx-svc/ jadx-out/          （jadx 反编译出的 AOSP / 小米代码）
+#   - recon/18_hostapd_conf.txt    （含热点明文密码与客户端 MAC）
+#   - recon/*.txt, phase4*/        （设备抓取结果，含 SSID / BSSID / MAC）
+#   - tools/                       （Gradle / jadx / SDK 压缩包）
+# ============================================================================
+.analysis/
+
+# ===== Android / Gradle =====
 .gradle/
-build/
 .kotlin/
-
-# Local configuration file (sdk path, etc)
-local.properties
-
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
+build/
+app/build/
 captures/
 .externalNativeBuild/
 .cxx/
-*.aab
 *.apk
-output-metadata.json
+*.aab
+*.ap_
+*.dex
+*.class
+local.properties
 
-# IntelliJ
-*.iml
+# ===== IDE =====
 .idea/
-misc.xml
-deploymentTargetDropDown.xml
-render.experimental.xml
+*.iml
+*.ipr
+*.iws
+.vscode/
 
-# Keystore files
-*.jks
-*.keystore
+# ===== 本会话工具目录 =====
+.mimocode/
 
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Android Profiling
-*.hprof
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini

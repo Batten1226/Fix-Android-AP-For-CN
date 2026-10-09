@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      LSPosed 作用域名：
+        "system"               = system_server（Wifi 主line服务跑在这里，必需）
+        "com.android.settings" = Phase 2 要接管的原版热点设置页
+      注意：不是 "android" —— LSPosed 里 system_server 的作用域名是 "system"
+      （实机 modules_config.db 里 HyperCeiler 的条目即为 ('com.sevtinge.hyperceiler','system',0)）
+    -->
+    <string-array name="xposed_scope">
+        <item>system</item>
+        <item>com.android.settings</item>
+    </string-array>
+</resources>

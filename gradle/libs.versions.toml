@@ -1,0 +1,25 @@
+[versions]
+# AGP 8.13.2 是 8.x 最后一个稳定版；其最大推荐 compileSdk 为 36
+agp = "8.13.2"
+kotlin = "2.4.21"
+# BOM 2026.03.00 -> Compose 1.10.5 / material3 1.4.0
+# 不要升到 2026.04.01+（Compose 1.11+ 要求 AGP 9.1 与 compileSdk 37）
+composeBom = "2026.03.00"
+# 与 Compose 1.10.x 同时期；1.13.0 会要求 compileSdk 37
+activityCompose = "1.11.0"
+# Xposed / LSPosed API（Maven Central 无，阿里云 public 镜像有）
+xposedApi = "82"
+
+[libraries]
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+xposed-api = { group = "de.robv.android.xposed", name = "api", version.ref = "xposedApi" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
