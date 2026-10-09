@@ -11,6 +11,9 @@ private const val TAG = "FabHotspotMod"
 
 private const val PKG_SYSTEM = "android"
 
+/** 系统设置 —— 6GHz 频段选项的闸门就在这个进程里。 */
+private const val PKG_SETTINGS = "com.android.settings"
+
 private const val CLS_SYSTEM_SERVICE_MANAGER = "com.android.server.SystemServiceManager"
 private const val CLS_WIFI_NATIVE = "com.android.server.wifi.WifiNative"
 private const val CLS_WIFI_SERVICE_IMPL = "com.android.server.wifi.WifiServiceImpl"
@@ -18,6 +21,7 @@ private const val CLS_WIFI_GLOBALS = "com.android.server.wifi.WifiGlobals"
 private const val CLS_AP_CONFIG_UTIL = "com.android.server.wifi.util.ApConfigUtil"
 private const val CLS_WIPHY_CAPS = "android.net.wifi.nl80211.DeviceWiphyCapabilities"
 private const val CLS_COUNTRY_CODE = "com.android.server.wifi.WifiCountryCode"
+private const val CLS_WIFI_MANAGER = "android.net.wifi.WifiManager"
 
 /** Wifi 主line 服务类的包前缀，用于从 startService 的参数里认出它 */
 private const val WIFI_SVC_PREFIX = "com.android.server.wifi."
@@ -70,8 +74,28 @@ class FabHotspotModule : IXposedHookLoadPackage {
     private var loggedCountry = false
     private var loggedApCc = false
     private var loggedSixGhzCh = false
+    private var logged6gGate = false
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        // ---- 系统设置进程：放行 6GHz 频段选项（决定 UI 里看不看得到「6 GHz」） ----
+        if (lpparam.packageName == PKG_SETTINGS) {
+            val scl = lpparam.classLoader
+            runCatching {
+                if (scl == null) throw IllegalStateException("no classloader")
+                // WifiTetherApBandPreferenceController:131  m6GHzSupported = mWifiManager.is6GHzBandSupported()
+                // WifiTetherApBandPreferenceController:139  is6GhzBandSupported() = m6GHzSupported && mCountryCode != null
+                // WifiHotspotRepository:305                 MIUI 的热点页也走这同一个方法
+                hookAll(scl, CLS_WIFI_MANAGER, "is6GHzBandSupported") { param ->
+                    if (!logged6gGate) {
+                        logged6gGate = true
+                        log("★ 放行 6GHz 频段选项：WifiManager#is6GHzBandSupported -> true（进程=设置）")
+                    }
+                    param.result = true
+                }
+            }.onFailure { log("!! 设置进程 6GHz 门钩子失败: ${it.message}") }
+            return
+        }
+
         if (lpparam.packageName != PKG_SYSTEM) return
         val cl = lpparam.classLoader ?: return
 

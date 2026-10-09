@@ -1,4 +1,4 @@
-# Fix Android AP For CN — v0.3.0
+# Fix Android AP For CN — v0.4.0
 
 在**国行小米 13（`fuxi`）**上解锁被地区限制的**热点（SoftAP）**能力。本版本的核心成果：
 
